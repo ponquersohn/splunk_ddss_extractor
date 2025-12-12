@@ -1,0 +1,32 @@
+journal.zst
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.env
+*.venv
+env/
+venv/
+ENV/
+.Python
+*.sqlite3
+*.log
+
+# VSCode
+.vscode/
+.history/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+*.tfvars
+*.tfplan
+*.backup
+
+# General
+.DS_Store
+Thumbs.db

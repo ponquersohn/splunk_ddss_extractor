@@ -1,0 +1,42 @@
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+**/.pytest_cache
+**/.coverage
+**/htmlcov
+**/*.egg-info
+**/dist
+**/build
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# Documentation
+*.md
+docs/
+
+# Terraform
+terraform/
+
+# Tests
+tests/
+
+# Docker
+docker-compose.override.yml
+docker/localstack_data/
+docker/local_data/
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log

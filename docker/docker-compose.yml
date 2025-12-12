@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  processor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: splunk-archiver:latest
+    container_name: splunk-archiver-processor
+    environment:
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET}
+      - SQS_QUEUE_URL=${SQS_QUEUE_URL}
+      - OUTPUT_PREFIX=${OUTPUT_PREFIX:-raw_archive/new/}
+      - OUTPUT_FORMAT=${OUTPUT_FORMAT:-json}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+    volumes:
+      - ../src:/app/src:ro
+      - ../scripts:/app/scripts:ro
+      - ./local_data:/data
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: LocalStack for local AWS testing
+  localstack:
+    image: localstack/localstack:latest
+    container_name: splunk-archiver-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3,sqs,sns
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+    volumes:
+      - "./localstack_data:/tmp/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
