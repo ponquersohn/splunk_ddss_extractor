@@ -15,12 +15,13 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code and setup.py
 COPY src/ /app/src/
-COPY scripts/ /app/scripts/
+COPY setup.py /app/
+COPY README.md /app/
 
-# Set Python path
-ENV PYTHONPATH=/app/src:$PYTHONPATH
+# Install package
+RUN pip install --no-cache-dir -e .
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && \
@@ -32,5 +33,6 @@ USER appuser
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)"
 
-# Run the processor script
-CMD ["python", "/app/scripts/process_archive.py"]
+# Default command shows help
+# Override with your own args: docker run image splunk-extract -i input.zst -o output.json
+CMD ["splunk-extract", "--help"]

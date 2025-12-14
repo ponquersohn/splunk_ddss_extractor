@@ -2,166 +2,221 @@
 High-level extraction interface for Splunk journal files
 """
 
+import gzip
+import io
 import logging
+import sys
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Optional
+from urllib.parse import urlparse
+
+import boto3
+import zstandard as zstd
 
 from .decoder import JournalDecoder
-from .utils import get_output_writer
-
+from .output_formatters import get_formatter
+from .writers import FileWriter, S3Writer, StdoutWriter
 
 logger = logging.getLogger(__name__)
 
 
-def extract_journal(journal_path: str) -> list[Dict[str, Any]]:
+class Extractor:
     """
-    Extract all events from a journal file
-
-    Args:
-        journal_path: Path to journal file or directory
-
-    Returns:
-        List of event dictionaries
-
-    Raises:
-        Exception: If extraction fails
+    High-level extractor for Splunk journal files with streaming support.
     """
-    logger.info(f"Extracting events from {journal_path}")
 
-    decoder = JournalDecoder(journal_path)
-    events = []
+    def __init__(self):
+        self._s3_client = None
 
-    try:
-        while decoder.scan():
-            event = decoder.get_event()
+    @property
+    def s3_client(self):
+        """Lazy initialization of S3 client"""
+        if self._s3_client is None:
+            self._s3_client = boto3.client("s3")
+        return self._s3_client
 
-            event_data = {
-                "timestamp": event.index_time,
-                "host": decoder.host(),
-                "source": decoder.source(),
-                "sourcetype": decoder.source_type(),
-                "message": event.message_string(),
-                "stream_id": event.stream_id,
-                "stream_offset": event.stream_offset,
-            }
+    def extract(
+        self,
+        input_path: Optional[str] = None,
+        output_path: Optional[str] = None,
+        output_format: str = "ndjson",
+    ) -> int:
+        """
+        Extract journal to output with automatic compression detection
 
-            events.append(event_data)
+        Args:
+            input_path: Local file path, s3://bucket/key, or None for stdin
+            output_path: Local file path, s3://bucket/key, or None for stdout
+            output_format: 'ndjson', 'csv', 'parquet' (default: ndjson)
+            input_compression: 'auto' (detect from filename), 'zst', 'gz', 'none'
+            output_compression: 'auto' (detect from filename), 'gz', 'none'
 
-        if decoder.err():
-            raise decoder.err()
+        Returns:
+            Number of events extracted
+        """
+        input_desc = input_path or "stdin"
+        output_desc = output_path or "stdout"
+        logger.info(
+            f"Extracting {input_desc} -> {output_desc} (format: {output_format})"
+        )
 
-    except Exception as e:
-        logger.error(f"Error during extraction: {e}")
-        raise
+        input_stream = self._open_input(input_path)
 
-    logger.info(f"Extracted {len(events)} events")
-    return events
+        # Create decoder with streaming reader
+        decoder = JournalDecoder(reader=input_stream)
 
+        formatter = get_formatter(output_format)
 
-def extract_to_file(
-    journal_path: str,
-    output_file: str,
-    output_format: str = "json",
-    compress: bool = True
-) -> int:
-    """
-    Extract events from journal file and write to output file
+        # Process events line by line
+        event_count = 0
+        with self._open_output(output_path) as output_writer:
+            with formatter(output_stream=output_writer) as writer:
+                while decoder.scan():
+                    event = decoder.get_event()
+                    event_data = {
+                        "timestamp": event.index_time,
+                        "host": decoder.host(),
+                        "source": decoder.source(),
+                        "sourcetype": decoder.source_type(),
+                        "message": event.message_string(),
+                    }
+                    writer.write(event_data)
+                    event_count += 1
 
-    Args:
-        journal_path: Path to journal file or directory
-        output_file: Output file path
-        output_format: Output format (json, csv, parquet)
-        compress: Whether to gzip compress the output (default: True)
-                  For JSON/CSV: creates .gz file
-                  For Parquet: uses snappy compression internally
+                    # Log progress
+                    if event_count % 10000 == 0:
+                        logger.debug(f"Processed {event_count} events")
 
-    Returns:
-        Number of events extracted
+                if decoder.err():
+                    raise decoder.err()
 
-    Raises:
-        Exception: If extraction or writing fails
-    """
-    compress_note = " (compressed)" if compress else " (uncompressed)"
-    logger.info(f"Extracting {journal_path} to {output_file} ({output_format}{compress_note})")
+        logger.info(f"Successfully extracted {event_count} events")
+        return event_count
 
-    output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    def _open_stdin_input(self) -> io.BufferedReader:
+        """
+        Open stdin with optional decompression
 
-    decoder = JournalDecoder(journal_path)
-    event_count = 0
+        Args:
+            compression: 'zst', 'gz', or 'none' (default: 'none')
 
-    try:
-        with get_output_writer(output_format, output_path, compress=compress) as writer:
-            while decoder.scan():
-                event = decoder.get_event()
+        Returns:
+            BufferedReader ready for decoding
+        """
+        logger.debug("Opening stdin for input")
 
-                event_data = {
-                    "timestamp": event.index_time,
-                    "host": decoder.host(),
-                    "source": decoder.source(),
-                    "sourcetype": decoder.source_type(),
-                    "message": event.message_string(),
-                }
+        # Get stdin as binary stream
+        stdin_stream = sys.stdin.buffer
 
-                writer.write(event_data)
-                event_count += 1
+        return io.BufferedReader(stdin_stream)
 
-                # Log progress
-                if event_count % 10000 == 0:
-                    logger.debug(f"Processed {event_count} events")
+    def _apply_decompression(self, filename: str, stream) -> io.BufferedReader:
+        """
+        Apply decompression to stream based on filename extension
 
-            if decoder.err():
-                raise decoder.err()
+        Args:
+            filename: Filename or path (used to detect compression type)
+            stream: Raw byte stream (file object or S3 Body)
 
-    except Exception as e:
-        logger.error(f"Error during extraction: {e}")
-        raise
+        Returns:
+            BufferedReader with decompressed stream
+        """
+        filename_lower = filename.lower()
 
-    logger.info(f"Successfully extracted {event_count} events to {output_file}")
-    return event_count
+        if filename_lower.endswith(".zst"):
+            # Zstandard streaming decompression
+            dctx = zstd.ZstdDecompressor()
+            decompressed = dctx.stream_reader(stream)
+            return decompressed
 
+        elif filename_lower.endswith(".gz"):
+            # Gzip streaming decompression
+            decompressed = gzip.GzipFile(fileobj=stream)
+            return decompressed
 
-def extract_batch(
-    journal_paths: list[str],
-    output_dir: str,
-    output_format: str = "json"
-) -> Dict[str, int]:
-    """
-    Extract multiple journal files to output directory
+        else:
+            # Uncompressed
+            return stream
 
-    Args:
-        journal_paths: List of journal file paths
-        output_dir: Output directory
-        output_format: Output format (json, csv, parquet)
+    def _open_input(self, path: str) -> io.BufferedReader:
+        """
+        Open input stream with automatic compression detection
 
-    Returns:
-        Dictionary mapping input path to event count
+        Supports:
+        - Local files: /path/to/journal.zst
+        - S3 URIs: s3://bucket/key/journal.zst
+        - Compression: .zst, .gz, uncompressed
 
-    Raises:
-        Exception: If extraction fails
-    """
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+        Returns:
+            BufferedReader ready for decoding (decompressed if needed)
+        """
+        if path is None:
+            return self._open_stdin_input()
+        if path.startswith("s3://"):
+            return self._open_s3_input(path)
+        else:
+            return self._open_local_input(path)
 
-    results = {}
+    def _open_local_input(self, path: str) -> io.BufferedReader:
+        """Open local file with automatic decompression"""
+        file_path = Path(path)
 
-    for journal_path in journal_paths:
-        try:
-            # Generate output filename
-            input_name = Path(journal_path).stem
-            output_file = output_path / f"{input_name}.{output_format}"
+        if not file_path.exists():
+            raise FileNotFoundError(f"Input file not found: {path}")
 
-            # Extract
-            event_count = extract_to_file(
-                journal_path,
-                str(output_file),
-                output_format
-            )
+        # Open raw file
+        raw_file = open(file_path, "rb")
 
-            results[journal_path] = event_count
+        # Apply decompression based on extension
+        return self._apply_decompression(path, raw_file)
 
-        except Exception as e:
-            logger.error(f"Failed to extract {journal_path}: {e}")
-            results[journal_path] = -1
+    def _open_s3_input(self, s3_uri: str) -> io.BufferedReader:
+        """
+        Open S3 object with automatic decompression (streaming, no download)
 
-    return results
+        Args:
+            s3_uri: S3 URI like s3://bucket/path/to/journal.zst
+
+        Returns:
+            BufferedReader with decompressed stream
+        """
+        # Parse S3 URI
+        parsed = urlparse(s3_uri)
+        bucket = parsed.netloc
+        key = parsed.path.lstrip("/")
+
+        logger.debug(f"Opening S3 stream: bucket={bucket}, key={key}")
+
+        # Get streaming body from S3
+        response = self.s3_client.get_object(Bucket=bucket, Key=key)
+        s3_stream = response["Body"]
+
+        # Apply decompression based on key extension
+        return self._apply_decompression(key, s3_stream)
+
+    def _open_output(self, path: str):
+        """
+        Create output writer for local file or S3
+
+        Args:
+            path: Local file path or s3://bucket/key
+            output_format: 'ndjson', 'csv', 'parquet'
+
+        Returns:
+            Writer object with write() and close() methods
+        """
+        if not path:
+            # Stdout output
+            output = StdoutWriter()
+        elif path.startswith("s3://"):
+            # S3 output - write to buffer then upload
+            output = S3Writer(path, self.s3_client)
+        else:
+            # Local file output
+            output_path = Path(path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Map ndjson to json for get_output_writer (it calls it 'json')
+            output = FileWriter(str(output_path))
+
+        return output

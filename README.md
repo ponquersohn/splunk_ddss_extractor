@@ -6,6 +6,8 @@ Convert Splunk self-hosted storage archives from compressed journal format to ra
 
 Splunk DDSS Extractor is a Python library that processes Splunk journal archives, extracts events, and converts them to raw format for easier analysis and long-term storage. Use it in your own applications, data pipelines, or as a CLI tool.
 
+**Note:** This project is based on the concept from [fionera/splunker](https://github.com/fionera/splunker), reimplemented in Python with additional features for production use.
+
 ## Features
 
 - Automatic compression detection (.zst, .gz, uncompressed)
@@ -176,6 +178,15 @@ timestamp,host,source,sourcetype,message
 ### Parquet
 
 Columnar format optimized for analytics (requires pyarrow).
+
+## Credits
+
+This project is inspired by and based on the concept from [fionera/splunker](https://github.com/fionera/splunker), a Go implementation for extracting Splunk journal files. This Python implementation extends the original concept with:
+
+- Streaming S3 support (no temporary files)
+- Multiple output formats (JSON Lines, CSV, Parquet)
+- Python library API for easy integration
+- Docker and AWS deployment options
 
 ## License
 

@@ -2,10 +2,11 @@
 Test automatic compression detection
 """
 
-import pytest
-import tempfile
 import gzip
+import tempfile
 from pathlib import Path
+
+import pytest
 
 
 class TestCompressionDetection:
@@ -28,16 +29,14 @@ class TestCompressionDetection:
         # This would require a real .zst journal file
         # For now, just test the import works
         from splunk_ddss_extractor.decoder import JournalDecoder
+
         assert JournalDecoder is not None
 
     def test_module_exports(self):
         """Test that all expected classes are exported"""
-        from splunk_ddss_extractor.decoder import (
-            JournalDecoder,
-            Event,
-            Opcode,
-            get_compression_type,
-        )
+        from splunk_ddss_extractor.decoder import (Event, JournalDecoder,
+                                                   Opcode,
+                                                   get_compression_type)
 
         assert JournalDecoder is not None
         assert Event is not None

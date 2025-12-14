@@ -8,22 +8,19 @@ Parses Splunk journal files with automatic compression detection:
 """
 
 import io
-import os
+import logging
 import struct
 from dataclasses import dataclass, field
 from enum import IntEnum
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-try:
-    import zstandard as zstd
-except ImportError:
-    print("Warning: zstandard module not installed. Install with: pip install zstandard")
-    zstd = None
+# Module logger
+logger = logging.getLogger(__name__)
 
 
 class Opcode(IntEnum):
     """Journal opcodes"""
+
     NOP = 0
     OLDSTYLE_EVENT = 1
     OLDSTYLE_EVENT_WITH_HASH = 2
@@ -40,6 +37,7 @@ class Opcode(IntEnum):
 @dataclass
 class Header:
     """Journal header structure"""
+
     version: int
     align_bits: int
     base_index_time: int
@@ -48,6 +46,7 @@ class Header:
 @dataclass
 class RawdataMetaKeyItemType:
     """Metadata key item type"""
+
     representation: int
     extra_ints_needed: int
 
@@ -57,14 +56,14 @@ class RawdataMetaKeyItemType:
 
 # Metadata type definitions
 RMKI_TYPES = {
-    0: RawdataMetaKeyItemType(0, 1),    # String
-    2: RawdataMetaKeyItemType(2, 1),    # Float32
-    3: RawdataMetaKeyItemType(3, 2),    # Float32Sigfigs
-    4: RawdataMetaKeyItemType(4, 2),    # OffsetLen
-    6: RawdataMetaKeyItemType(6, 2),    # Float32Precision
-    7: RawdataMetaKeyItemType(7, 3),    # Float32SigfigsPrecision
-    8: RawdataMetaKeyItemType(8, 1),    # Unsigned
-    9: RawdataMetaKeyItemType(9, 1),    # Signed
+    0: RawdataMetaKeyItemType(0, 1),  # String
+    2: RawdataMetaKeyItemType(2, 1),  # Float32
+    3: RawdataMetaKeyItemType(3, 2),  # Float32Sigfigs
+    4: RawdataMetaKeyItemType(4, 2),  # OffsetLen
+    6: RawdataMetaKeyItemType(6, 2),  # Float32Precision
+    7: RawdataMetaKeyItemType(7, 3),  # Float32SigfigsPrecision
+    8: RawdataMetaKeyItemType(8, 1),  # Unsigned
+    9: RawdataMetaKeyItemType(9, 1),  # Signed
     10: RawdataMetaKeyItemType(10, 1),  # Float64
     11: RawdataMetaKeyItemType(11, 2),  # Float64Sigfigs
     12: RawdataMetaKeyItemType(12, 3),  # OffsetLenWencoding
@@ -76,18 +75,19 @@ RMKI_TYPES = {
 @dataclass
 class Event:
     """Splunk journal event"""
+
     message_length: int = 0
     has_extended_storage: bool = False
     extended_storage_len: int = 0
     has_hash: bool = False
-    hash: bytes = field(default_factory=lambda: b'\x00' * 20)
+    hash: bytes = field(default_factory=lambda: b"\x00" * 20)
     stream_id: int = 0
     stream_offset: int = 0
     stream_sub_offset: int = 0
     index_time: int = 0
     sub_seconds: int = 0
     metadata_count: int = 0
-    message: bytes = b''
+    message: bytes = b""
     include_punctuation: bool = False
 
     def reset(self):
@@ -96,21 +96,21 @@ class Event:
         self.has_extended_storage = False
         self.extended_storage_len = 0
         self.has_hash = False
-        self.hash = b'\x00' * 20
+        self.hash = b"\x00" * 20
         self.stream_id = 0
         self.stream_offset = 0
         self.stream_sub_offset = 0
         self.index_time = 0
         self.sub_seconds = 0
         self.metadata_count = 0
-        self.message = b''
+        self.message = b""
         self.include_punctuation = False
 
     def message_string(self) -> str:
         """Return message as string"""
         try:
-            return self.message.decode('utf-8', errors='replace')
-        except:
+            return self.message.decode("utf-8", errors="replace")
+        except Exception:
             return str(self.message)
 
     def __str__(self) -> str:
@@ -129,60 +129,97 @@ class Event:
         )
 
 
-class CountedReader:
-    """Buffered reader that tracks position"""
-
-    def __init__(self, reader: io.BufferedReader):
+class ForwardBufferedStream:
+    def __init__(self, reader, chunk_size=64 * 1024):
         self.reader = reader
-        self.pos = 0
-        self.buffer = b''
-        self.buffer_pos = 0
+        self.chunk_size = chunk_size
+        self.buffer = bytearray()
+        self._eof = False
+        self.pos = 0  # absolute stream position
 
-    def read_byte(self) -> int:
-        """Read a single byte"""
-        b = self.reader.read(1)
-        if not b:
-            raise EOFError("End of file")
-        self.pos += 1
-        return b[0]
+    # -------------------------
+    # Internal
+    # -------------------------
+
+    def _fill(self, n: int):
+        """Ensure at least n bytes in buffer."""
+        while len(self.buffer) < n and not self._eof:
+            chunk = self.reader.read(max(self.chunk_size, n - len(self.buffer)))
+            if not chunk:
+                self._eof = True
+                break
+            self.buffer.extend(chunk)
+
+        if len(self.buffer) < n:
+            raise EOFError("End of stream")
+
+    # -------------------------
+    # Public API
+    # -------------------------
+
+    def tell(self) -> int:
+        """Return absolute position in the stream."""
+        return self.pos
 
     def read(self, n: int) -> bytes:
-        """Read n bytes"""
-        data = self.reader.read(n)
-        if len(data) < n:
-            raise EOFError(f"Expected {n} bytes, got {len(data)}")
-        self.pos += len(data)
+        if n <= 0:
+            return b""
+
+        self._fill(n)
+        data = bytes(self.buffer[:n])
+        del self.buffer[:n]
+        self.pos += n
         return data
+
+    def read_byte(self) -> int:
+        self._fill(1)
+        b = self.buffer[0]
+        del self.buffer[0]
+        self.pos += 1
+        return b
 
     def peek(self, n: int) -> bytes:
-        """Peek at next n bytes without consuming"""
-        current_pos = self.reader.tell()
-        data = self.reader.read(n)
-        self.reader.seek(current_pos)
-        return data
+        if n <= 0:
+            return b""
 
-    def discard(self, n: int) -> int:
-        """Discard n bytes"""
-        data = self.reader.read(n)
-        discarded = len(data)
-        self.pos += discarded
-        return discarded
+        try:
+            self._fill(n)
+        except EOFError:
+            logger.warning("Reached end of stream while peeking")
+        return bytes(self.buffer[:n])
+
+    def skip(self, n: int) -> int:
+        """Read-and-drop n bytes (old discard semantics)."""
+        self._fill(n)
+        del self.buffer[:n]
+        self.pos += n
+        return n
+
+    def discard(self, n: int = None):
+        """
+        Discard first n bytes of the buffer to free memory.
+        Does not affect stream position (pos).
+        """
+        if n is None or n > len(self.buffer):
+            n = len(self.buffer)
+        if n > 0:
+            del self.buffer[:n]
 
 
-def read_uvarint(reader: CountedReader) -> int:
+def read_uvarint(reader: ForwardBufferedStream) -> int:
     """Read unsigned varint"""
     result = 0
     shift = 0
     while True:
         b = reader.read_byte()
-        result |= (b & 0x7f) << shift
+        result |= (b & 0x7F) << shift
         if (b & 0x80) == 0:
             break
         shift += 7
     return result
 
 
-def read_varint(reader: CountedReader) -> int:
+def read_varint(reader: ForwardBufferedStream) -> int:
     """Read signed varint (zigzag encoded)"""
     u = read_uvarint(reader)
     # Zigzag decode
@@ -197,7 +234,7 @@ def decode_uvarint_from_bytes(data: bytes, offset: int = 0) -> Tuple[int, int]:
     for i in range(offset, len(data)):
         b = data[i]
         n += 1
-        result |= (b & 0x7f) << shift
+        result |= (b & 0x7F) << shift
         if (b & 0x80) == 0:
             return result, n
         shift += 7
@@ -219,9 +256,9 @@ class JournalDecoder:
 
     HASH_SIZE = 20
 
-    def __init__(self, name: str):
-        self.name = name
-        self.reader: Optional[CountedReader] = None
+    def __init__(self, reader: Optional[io.BufferedReader]):
+
+        self.reader = ForwardBufferedStream(reader)
         self.opcode = 0
         self.event = Event()
         self.error: Optional[Exception] = None
@@ -232,75 +269,6 @@ class JournalDecoder:
         self.active_host = 0
         self.active_source = 0
         self.active_source_type = 0
-
-        # Open the journal
-        reader = self._open_journal(name)
-        self.reader = CountedReader(reader)
-
-    def _open_journal(self, name: str) -> io.BufferedReader:
-        """
-        Open and decompress journal file with automatic compression detection
-
-        Supports:
-        - .zst files (zstandard compression)
-        - .gz files (gzip compression)
-        - No extension or other (uncompressed text)
-        - Directory path (looks for rawdata/journal.zst)
-        """
-        import gzip
-
-        path = Path(name)
-
-        # If it's a file, detect compression by extension
-        if path.is_file():
-            suffix = path.suffix.lower()
-
-            if suffix == '.zst':
-                # Zstandard compression
-                if zstd is None:
-                    raise ImportError("zstandard module required for .zst files. Install with: pip install zstandard")
-
-                with open(path, 'rb') as f:
-                    dctx = zstd.ZstdDecompressor()
-                    decompressed = dctx.stream_reader(f)
-                    data = decompressed.read()
-                    return io.BufferedReader(io.BytesIO(data))
-
-            elif suffix == '.gz':
-                # Gzip compression
-                with gzip.open(path, 'rb') as f:
-                    data = f.read()
-                    return io.BufferedReader(io.BytesIO(data))
-
-            else:
-                # Uncompressed or unknown extension - treat as plain text
-                with open(path, 'rb') as f:
-                    data = f.read()
-                    return io.BufferedReader(io.BytesIO(data))
-
-        # If it's a directory, look for journal file with automatic detection
-        if path.is_dir():
-            rawdata_path = path / "rawdata"
-
-            # Try to find journal file with various extensions
-            journal_candidates = [
-                rawdata_path / "journal.zst",
-                rawdata_path / "journal.gz",
-                rawdata_path / "journal",
-            ]
-
-            for journal_path in journal_candidates:
-                if journal_path.exists():
-                    # Recursively call with the file path for compression detection
-                    return self._open_journal(str(journal_path))
-
-            raise FileNotFoundError(
-                f"No journal file found in {rawdata_path}. "
-                f"Looked for: journal.zst, journal.gz, journal"
-            )
-
-        # Path doesn't exist
-        raise FileNotFoundError(f"Path not found: {path}")
 
     def host(self) -> str:
         """Get current host"""
@@ -354,9 +322,11 @@ class JournalDecoder:
 
     def _is_event_opcode(self, opcode: int) -> bool:
         """Check if opcode is an event opcode"""
-        return (opcode == Opcode.OLDSTYLE_EVENT or
-                opcode == Opcode.OLDSTYLE_EVENT_WITH_HASH or
-                (opcode >= 32 and opcode <= 43))
+        return (
+            opcode == Opcode.OLDSTYLE_EVENT
+            or opcode == Opcode.OLDSTYLE_EVENT_WITH_HASH
+            or (opcode >= 32 and opcode <= 43)
+        )
 
     def _decode_next(self):
         """Decode next opcode"""
@@ -385,22 +355,22 @@ class JournalDecoder:
         """Decode journal header"""
         data = self.reader.read(6)  # 1 + 1 + 4 bytes
         version = data[0]
-        align_bits = data[1]
-        base_index_time = struct.unpack('<i', data[2:6])[0]
+        align_bits = data[1]  # noqa unused currently
+        base_index_time = struct.unpack("<i", data[2:6])[0]  # noqa unused currently
 
-        print(f"Journal {self.name} - Version: {version}")
+        logger.debug(f"Journal Version: {version}")
         # align_mask = (1 << align_bits) - 1
 
     def _decode_splunk_private(self):
         """Decode splunk private data (skip it)"""
         length = read_uvarint(self.reader)
-        self.reader.discard(length)
+        self.reader.skip(length)
 
     def _read_string_field(self) -> str:
         """Read string field"""
         length = read_uvarint(self.reader)
         data = self.reader.read(length)
-        return data.decode('utf-8', errors='replace')
+        return data.decode("utf-8", errors="replace")
 
     def _decode_host(self):
         """Decode new host"""
@@ -447,7 +417,7 @@ class JournalDecoder:
         # Base time
         if self.opcode & 0x1 != 0:
             data = self.reader.read(4)
-            self.base_time = struct.unpack('<i', data)[0]
+            self.base_time = struct.unpack("<i", data)[0]
 
     def _decode_event(self):
         """Decode event"""
@@ -471,11 +441,11 @@ class JournalDecoder:
         # Hash
         if self.opcode & 0x01 == 0:
             self.event.has_hash = True
-            self.event.hash = peek[offset:offset + self.HASH_SIZE]
+            self.event.hash = peek[offset : offset + self.HASH_SIZE]
             offset += self.HASH_SIZE
 
         # Stream ID (uint64, little endian)
-        self.event.stream_id = struct.unpack('<Q', peek[offset:offset + 8])[0]
+        self.event.stream_id = struct.unpack("<Q", peek[offset : offset + 8])[0]
         offset += 8
 
         # Stream offset
@@ -500,7 +470,7 @@ class JournalDecoder:
         offset += n
 
         # Discard what we peeked
-        self.reader.discard(offset)
+        self.reader.skip(offset)
 
         # Read metadata
         if self.event.metadata_count > 0:
@@ -511,11 +481,11 @@ class JournalDecoder:
                 n = self._read_metadata(metadata_peek, metadata_offset)
                 metadata_offset += n
 
-            self.reader.discard(metadata_offset)
+            self.reader.skip(metadata_offset)
 
         # Extended storage
         if self.event.has_extended_storage:
-            e_storage = self.reader.read(self.event.extended_storage_len)
+            e_storage = self.reader.read(self.event.extended_storage_len)  # noqa
             # Extended storage handling (not fully implemented)
 
         # Calculate actual message length
@@ -558,88 +528,3 @@ class JournalDecoder:
             peek_offset += n
 
         return peek_offset
-
-
-def get_compression_type(file_path: str) -> str:
-    """
-    Detect compression type from file extension
-
-    Args:
-        file_path: Path to file
-
-    Returns:
-        'zst', 'gz', or 'none'
-    """
-    path = Path(file_path)
-    suffix = path.suffix.lower()
-
-    if suffix == '.zst':
-        return 'zst'
-    elif suffix == '.gz':
-        return 'gz'
-    else:
-        return 'none'
-
-
-def main():
-    """
-    Example usage
-
-    Supports multiple input formats:
-    - Direct file: journal.zst, journal.gz, or uncompressed journal
-    - Directory: looks for rawdata/journal.{zst,gz,} automatically
-    """
-    import sys
-
-    if len(sys.argv) < 2:
-        print("Usage: python extract_journal.py <path_to_journal_file_or_directory>")
-        print("")
-        print("Supports:")
-        print("  - Zstandard compressed: journal.zst")
-        print("  - Gzip compressed: journal.gz")
-        print("  - Uncompressed: journal (no extension)")
-        print("  - Directory: /path/to/splunk/index/db/ (auto-detects compression)")
-        print("")
-        print("Examples:")
-        print("  python extract_journal.py /tmp/journal.zst")
-        print("  python extract_journal.py /tmp/journal.gz")
-        print("  python extract_journal.py /tmp/journal")
-        print("  python extract_journal.py /path/to/splunk/index/db/")
-        sys.exit(1)
-
-    journal_path = sys.argv[1]
-
-    try:
-        decoder = JournalDecoder(journal_path)
-
-        event_count = 0
-        while decoder.scan():
-            event = decoder.get_event()
-            event_count += 1
-            if event_count <= 10:
-                print(f"\n--- Event {event_count} ---")
-                print(f"Host: {decoder.host()}")
-                print(f"Source: {decoder.source()}")
-                print(f"SourceType: {decoder.source_type()}")
-                print(f"IndexTime: {event.index_time}")
-                print(f"Message: {event.message_string()}")
-
-            # Limit output for demo
-            if event_count == 10:
-                print(f"\n... (showing first 10 events)")
-                
-
-        if decoder.err():
-            print(f"\nError: {decoder.err()}")
-            raise decoder.err()
-
-        print(f"\nTotal events processed: {event_count}")
-
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-
-
-if __name__ == "__main__":
-    main()

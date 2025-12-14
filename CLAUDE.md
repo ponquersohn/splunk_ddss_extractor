@@ -4,6 +4,8 @@
 
 This project provides a Python library to convert Splunk self-hosted storage archives from compressed journal format to raw format. The library extracts events from Splunk's journal files (with automatic compression detection) and outputs them in multiple formats (JSON Lines, CSV, Parquet).
 
+**Attribution:** This project is based on the concept from [fionera/splunker](https://github.com/fionera/splunker), a Go implementation for extracting Splunk journal files. This Python implementation extends the original with streaming S3 support, multiple output formats, and production-ready features.
+
 **Key Features:**
 - Automatic compression detection (.zst, .gz, uncompressed)
 - Multiple output formats (JSON Lines, CSV, Parquet)
@@ -58,8 +60,8 @@ splunk_ddss_extractor/
 │   ├── docker-compose.yml           # Local development setup
 │   └── .dockerignore
 │
-├── scripts/                         # Example scripts
-│   └── process_archive.py           # Example processing script
+├── scripts/                         # Utility scripts
+│   └── run_extractor.py             # Example extraction script
 │
 └── tests/                           # Test suite
     ├── test_decoder.py

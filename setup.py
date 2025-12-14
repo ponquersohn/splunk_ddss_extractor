@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
@@ -16,7 +16,6 @@ setup(
     install_requires=[
         "zstandard>=0.22.0",
         "boto3>=1.34.0",
-        "click>=8.1.7",
     ],
     extras_require={
         "dev": [
@@ -32,7 +31,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "splunk-ddss-extractor=cli:main",
+            "splunk-extract=splunk_ddss_extractor.main:main",
         ],
     },
     classifiers=[
