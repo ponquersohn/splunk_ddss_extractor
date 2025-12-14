@@ -1,10 +1,5 @@
 """
 Splunk Journal Parser - Python implementation
-
-Parses Splunk journal files with automatic compression detection:
-- .zst files (zstandard compression)
-- .gz files (gzip compression)
-- No extension or other (uncompressed)
 """
 
 import io
@@ -13,6 +8,8 @@ import struct
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Dict, List, Optional, Tuple
+
+from .stream import JournalStream
 
 # Module logger
 logger = logging.getLogger(__name__)
@@ -89,6 +86,7 @@ class Event:
     metadata_count: int = 0
     message: bytes = b""
     include_punctuation: bool = False
+    metadata_fields: Dict[str, str] = None
 
     def reset(self):
         """Reset event to initial state"""
@@ -105,6 +103,7 @@ class Event:
         self.metadata_count = 0
         self.message = b""
         self.include_punctuation = False
+        self.metadata_fields = {}
 
     def message_string(self) -> str:
         """Return message as string"""
@@ -126,104 +125,8 @@ class Event:
             f"metadataCount: {self.metadata_count} - "
             f"message: {self.message_string()} - "
             f"includePunctuation: {self.include_punctuation}"
+            f"metadataFields: {self.metadata_fields}"
         )
-
-
-class ForwardBufferedStream:
-    def __init__(self, reader, chunk_size=64 * 1024):
-        self.reader = reader
-        self.chunk_size = chunk_size
-        self.buffer = bytearray()
-        self._eof = False
-        self.pos = 0  # absolute stream position
-
-    # -------------------------
-    # Internal
-    # -------------------------
-
-    def _fill(self, n: int):
-        """Ensure at least n bytes in buffer."""
-        while len(self.buffer) < n and not self._eof:
-            chunk = self.reader.read(max(self.chunk_size, n - len(self.buffer)))
-            if not chunk:
-                self._eof = True
-                break
-            self.buffer.extend(chunk)
-
-        if len(self.buffer) < n:
-            raise EOFError("End of stream")
-
-    # -------------------------
-    # Public API
-    # -------------------------
-
-    def tell(self) -> int:
-        """Return absolute position in the stream."""
-        return self.pos
-
-    def read(self, n: int) -> bytes:
-        if n <= 0:
-            return b""
-
-        self._fill(n)
-        data = bytes(self.buffer[:n])
-        del self.buffer[:n]
-        self.pos += n
-        return data
-
-    def read_byte(self) -> int:
-        self._fill(1)
-        b = self.buffer[0]
-        del self.buffer[0]
-        self.pos += 1
-        return b
-
-    def peek(self, n: int) -> bytes:
-        if n <= 0:
-            return b""
-
-        try:
-            self._fill(n)
-        except EOFError:
-            logger.warning("Reached end of stream while peeking")
-        return bytes(self.buffer[:n])
-
-    def skip(self, n: int) -> int:
-        """Read-and-drop n bytes (old discard semantics)."""
-        self._fill(n)
-        del self.buffer[:n]
-        self.pos += n
-        return n
-
-    def discard(self, n: int = None):
-        """
-        Discard first n bytes of the buffer to free memory.
-        Does not affect stream position (pos).
-        """
-        if n is None or n > len(self.buffer):
-            n = len(self.buffer)
-        if n > 0:
-            del self.buffer[:n]
-
-
-def read_uvarint(reader: ForwardBufferedStream) -> int:
-    """Read unsigned varint"""
-    result = 0
-    shift = 0
-    while True:
-        b = reader.read_byte()
-        result |= (b & 0x7F) << shift
-        if (b & 0x80) == 0:
-            break
-        shift += 7
-    return result
-
-
-def read_varint(reader: ForwardBufferedStream) -> int:
-    """Read signed varint (zigzag encoded)"""
-    u = read_uvarint(reader)
-    # Zigzag decode
-    return (u >> 1) ^ -(u & 1)
 
 
 def decode_uvarint_from_bytes(data: bytes, offset: int = 0) -> Tuple[int, int]:
@@ -258,7 +161,7 @@ class JournalDecoder:
 
     def __init__(self, reader: Optional[io.BufferedReader]):
 
-        self.reader = ForwardBufferedStream(reader)
+        self.reader = JournalStream(reader)
         self.opcode = 0
         self.event = Event()
         self.error: Optional[Exception] = None
@@ -363,12 +266,12 @@ class JournalDecoder:
 
     def _decode_splunk_private(self):
         """Decode splunk private data (skip it)"""
-        length = read_uvarint(self.reader)
+        length = self.reader.read_uvarint()
         self.reader.skip(length)
 
     def _read_string_field(self) -> str:
         """Read string field"""
-        length = read_uvarint(self.reader)
+        length = self.reader.read_uvarint()
         data = self.reader.read(length)
         return data.decode("utf-8", errors="replace")
 
@@ -404,15 +307,15 @@ class JournalDecoder:
         """Decode new state (opcodes 17-31)"""
         # Active host
         if self.opcode & 0x8 != 0:
-            self.active_host = read_uvarint(self.reader)
+            self.active_host = self.reader.read_uvarint()
 
         # Active source
         if self.opcode & 0x4 != 0:
-            self.active_source = read_uvarint(self.reader)
+            self.active_source = self.reader.read_uvarint()
 
         # Active source type
         if self.opcode & 0x2 != 0:
-            self.active_source_type = read_uvarint(self.reader)
+            self.active_source_type = self.reader.read_uvarint()
 
         # Base time
         if self.opcode & 0x1 != 0:
@@ -434,6 +337,7 @@ class JournalDecoder:
 
         # Extended storage
         if self.opcode & 0x4 != 0:
+            # this shouldnt happen for DDSS journals
             self.event.has_extended_storage = True
             self.event.extended_storage_len, n = decode_uvarint_from_bytes(peek, offset)
             offset += n

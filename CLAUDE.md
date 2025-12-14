@@ -72,16 +72,18 @@ splunk_ddss_extractor/
 
 ### Automatic Compression Detection
 
-The decoder automatically detects and handles compression based on file extension:
+The Extractor class automatically detects and handles compression based on file extension:
 
 ```python
-# All these work automatically
-from splunk_ddss_extractor.decoder import JournalDecoder
+from splunk_ddss_extractor.extractor import Extractor
 
-decoder = JournalDecoder("journal.zst")  # Zstandard
-decoder = JournalDecoder("journal.gz")   # Gzip
-decoder = JournalDecoder("journal")      # Uncompressed
-decoder = JournalDecoder("/path/to/db/") # Auto-detects in directory
+extractor = Extractor()
+
+# All these work automatically
+extractor.extract("journal.zst", "output.json", "ndjson")  # Zstandard
+extractor.extract("journal.gz", "output.json", "ndjson")   # Gzip
+extractor.extract("journal", "output.json", "ndjson")      # Uncompressed
+extractor.extract("s3://bucket/journal.zst", "output.json", "ndjson")  # S3 with auto-detect
 ```
 
 **Supported Formats:**
@@ -89,11 +91,7 @@ decoder = JournalDecoder("/path/to/db/") # Auto-detects in directory
 - `.gz` - Gzip compression (built-in Python)
 - No extension or other - Uncompressed plain text
 
-**Directory Mode:**
-When given a directory path, the decoder automatically searches for:
-1. `rawdata/journal.zst` (first priority)
-2. `rawdata/journal.gz` (second priority)
-3. `rawdata/journal` (uncompressed fallback)
+**Note:** The low-level `JournalDecoder` class requires an uncompressed stream and does not perform automatic decompression. Use `Extractor` for automatic compression handling.
 
 ### Output Formats
 
@@ -105,16 +103,44 @@ Raw archive formats supported:
 ### Simple API
 
 ```python
-from splunk_ddss_extractor.extractor import extract_to_file
+from splunk_ddss_extractor.extractor import Extractor
 
-# Extract to JSON Lines
-extract_to_file('/path/to/journal.zst', 'output.json', 'json')
+extractor = Extractor()
+
+# Extract to JSON Lines (ndjson)
+extractor.extract(
+    input_path='/path/to/journal.zst',
+    output_path='output.json',
+    output_format='ndjson'
+)
 
 # Extract to CSV
-extract_to_file('/path/to/journal.zst', 'output.csv', 'csv')
+extractor.extract(
+    input_path='/path/to/journal.zst',
+    output_path='output.csv',
+    output_format='csv'
+)
 
 # Extract to Parquet
-extract_to_file('/path/to/journal.zst', 'output.parquet', 'parquet')
+extractor.extract(
+    input_path='/path/to/journal.zst',
+    output_path='output.parquet',
+    output_format='parquet'
+)
+
+# Extract from S3 (streaming, no download)
+extractor.extract(
+    input_path='s3://bucket/path/journal.zst',
+    output_path='output.json',
+    output_format='ndjson'
+)
+
+# Extract to S3 (streaming upload)
+extractor.extract(
+    input_path='/path/to/journal.zst',
+    output_path='s3://bucket/output/data.json',
+    output_format='ndjson'
+)
 ```
 
 ## Testing Results
@@ -149,26 +175,29 @@ Example extracted event:
 ## Current Status
 
 ### Completed ✓
-- Original extraction logic (`extract_journal.py`)
+- Original extraction logic from fionera/splunker concept
 - **Automatic compression detection** (.zst, .gz, uncompressed)
 - Fixed file handling for all compression formats
-- Python library with extractor interface
-- Multi-format output (JSON, CSV)
+- Python library with `Extractor` class interface
+- **Multi-format output** (ndjson/JSON Lines, CSV, Parquet)
+- **Streaming S3 support** (read and write directly to/from S3, no temp files)
+- **CLI tool** (`python -m splunk_ddss_extractor.main`)
+- **Stdin/stdout streaming** support
 - Tested with real production archives and all compression formats
-- Comprehensive test suite for compression detection
-- Demo script showing compression features
 - Makefile for development workflow
 - Docker support for containerized environments
 
 ### TODO
-1. ~~Refactor `extract_journal.py` into proper Python module~~ (currently imports work)
-2. Add error handling and retry logic improvements
-3. Write comprehensive tests
-4. Create API documentation
-5. Add support for streaming output to S3
-6. Implement batch processing for large files
-7. Publish to PyPI
-8. Add CLI entry point
+1. ~~Refactor into proper Python module~~ ✓ Complete
+2. ~~Add CLI entry point~~ ✓ Complete
+3. ~~Add streaming S3 support~~ ✓ Complete
+4. Add error handling and retry logic improvements
+5. Write comprehensive tests (expand test coverage)
+6. Create detailed API documentation (docstrings, Sphinx docs)
+7. Implement batch processing for large files (parallel processing)
+8. Add progress bars for large files
+9. Publish to PyPI
+10. Add incremental processing with checkpoints
 
 ## Development Workflow
 
@@ -212,8 +241,9 @@ make test
 
 # Test extraction using the library
 python -c "
-from splunk_ddss_extractor.extractor import extract_to_file
-extract_to_file('/path/to/journal.zst', 'output.json', 'json')
+from splunk_ddss_extractor.extractor import Extractor
+extractor = Extractor()
+extractor.extract('/path/to/journal.zst', 'output.json', 'ndjson')
 "
 ```
 
@@ -249,54 +279,90 @@ pip install -e ".[dev]"       # Adds development dependencies
 ### Basic Usage
 
 ```python
-from splunk_ddss_extractor.extractor import extract_to_file
+from splunk_ddss_extractor.extractor import Extractor
 
 # Simple extraction
-extract_to_file('journal.zst', 'output.json', 'json')
+extractor = Extractor()
+extractor.extract('journal.zst', 'output.json', 'ndjson')
 ```
 
-### Advanced Usage
+### Advanced Usage (Low-level API)
 
 ```python
 from splunk_ddss_extractor.decoder import JournalDecoder
+import zstandard as zstd
 
-# Manual decoding with streaming
-decoder = JournalDecoder('journal.zst')
-
-for event in decoder.events():
-    print(f"Timestamp: {event.timestamp}")
-    print(f"Host: {event.host}")
-    print(f"Message: {event.message}")
+# For compressed files, decompress first, then pass to decoder
+with open('journal.zst', 'rb') as compressed_file:
+    dctx = zstd.ZstdDecompressor()
+    with dctx.stream_reader(compressed_file) as reader:
+        decoder = JournalDecoder(reader=reader)
+        while decoder.scan():
+            event = decoder.get_event()
+            print(f"Timestamp: {event.index_time}")
+            print(f"Host: {decoder.host()}")
+            print(f"Source: {decoder.source()}")
+            print(f"Sourcetype: {decoder.source_type()}")
+            print(f"Message: {event.message_string()}")
 ```
 
-### CLI Usage (Future)
+### CLI Usage
+
+The CLI tool is available via `python -m splunk_ddss_extractor.main`:
 
 ```bash
 # Extract to JSON
-splunk-extract journal.zst --format json --output output.json
+python -m splunk_ddss_extractor.main -i journal.zst -o output.json -f ndjson
 
 # Extract to CSV
-splunk-extract journal.zst --format csv --output output.csv
+python -m splunk_ddss_extractor.main -i journal.zst -o output.csv -f csv
 
-# Extract from S3
-splunk-extract s3://bucket/path/journal.zst --format json --output s3://bucket/output.json
+# Extract from S3 (streaming, no download)
+python -m splunk_ddss_extractor.main -i s3://bucket/path/journal.zst -o output.json
+
+# Extract to S3 (streaming upload)
+python -m splunk_ddss_extractor.main -i journal.zst -o s3://bucket/output/data.json
+
+# Stdin to stdout
+cat journal.zst | python -m splunk_ddss_extractor.main > output.json
+
+# S3 to stdout (streaming)
+python -m splunk_ddss_extractor.main -i s3://bucket/path/journal.zst > output.json
 ```
 
 ### Integration Examples
 
-**AWS Lambda:**
+**AWS Lambda (Streaming - No Downloads):**
+```python
+from splunk_ddss_extractor.extractor import Extractor
+
+def lambda_handler(event, context):
+    extractor = Extractor()
+
+    # Extract directly from S3 to S3 (streaming, no temp files!)
+    event_count = extractor.extract(
+        input_path='s3://input-bucket/path/journal.zst',
+        output_path='s3://output-bucket/path/output.json',
+        output_format='ndjson'
+    )
+
+    return {'statusCode': 200, 'events_extracted': event_count}
+```
+
+**AWS Lambda (Legacy - with Download):**
 ```python
 import boto3
-from splunk_ddss_extractor.extractor import extract_to_file
+from splunk_ddss_extractor.extractor import Extractor
 
 def lambda_handler(event, context):
     s3 = boto3.client('s3')
+    extractor = Extractor()
 
     # Download from S3
     s3.download_file('bucket', 'journal.zst', '/tmp/journal.zst')
 
     # Extract
-    extract_to_file('/tmp/journal.zst', '/tmp/output.json', 'json')
+    extractor.extract('/tmp/journal.zst', '/tmp/output.json', 'ndjson')
 
     # Upload result
     s3.upload_file('/tmp/output.json', 'bucket', 'output.json')
@@ -304,15 +370,18 @@ def lambda_handler(event, context):
 
 **ECS/Fargate Task:**
 ```python
-from splunk_ddss_extractor.extractor import extract_to_file
+from splunk_ddss_extractor.extractor import Extractor
 import os
 
-# Read from environment
-input_file = os.environ['INPUT_FILE']
-output_file = os.environ['OUTPUT_FILE']
-format = os.environ.get('FORMAT', 'json')
+extractor = Extractor()
 
-extract_to_file(input_file, output_file, format)
+# Read from environment
+input_file = os.environ['INPUT_FILE']  # Can be local or s3://
+output_file = os.environ['OUTPUT_FILE']  # Can be local or s3://
+format = os.environ.get('FORMAT', 'ndjson')
+
+event_count = extractor.extract(input_file, output_file, format)
+print(f"Extracted {event_count} events")
 ```
 
 ## Known Issues
@@ -342,29 +411,42 @@ From `extract_journal.py`:
 
 ## Library API
 
-### Main Functions
+### Main Classes
 
-**`extract_to_file(input_path, output_path, format='json')`**
-- Extract journal file to output format
-- Parameters:
-  - `input_path`: Path to journal file or directory
-  - `output_path`: Output file path
-  - `format`: Output format ('json', 'csv', 'parquet')
+**`Extractor`** (`from splunk_ddss_extractor.extractor import Extractor`)
 
-### Classes
+High-level interface for extraction tasks.
 
-**`JournalDecoder(path)`**
-- Low-level decoder for journal files
-- Methods:
-  - `events()`: Generator yielding event objects
-  - `close()`: Clean up resources
+Methods:
+- `extract(input_path, output_path, output_format='ndjson')` - Extract journal to output format
+  - `input_path`: Local file path, `s3://bucket/key`, or `None` for stdin
+  - `output_path`: Local file path, `s3://bucket/key`, or `None` for stdout
+  - `output_format`: `'ndjson'`, `'csv'`, or `'parquet'`
+  - Returns: Number of events extracted
+  - Supports streaming S3 operations (no temp files)
+  - Automatic compression detection (.zst, .gz, uncompressed)
 
-**`Event`** (dataclass)
-- `timestamp`: Unix timestamp
-- `host`: Host field
-- `source`: Source field
-- `sourcetype`: Sourcetype field
-- `message`: Event message/data
+**`JournalDecoder`** (`from splunk_ddss_extractor.decoder import JournalDecoder`)
+
+Low-level decoder for journal files. Requires uncompressed stream input.
+
+Constructor:
+- `JournalDecoder(reader)` - Pass a file-like reader object (must be uncompressed)
+
+Methods:
+- `scan()` - Scan for next event, returns `True` if found
+- `get_event()` - Get current event object
+- `host()` - Get host metadata for current event
+- `source()` - Get source metadata for current event
+- `source_type()` - Get sourcetype metadata for current event
+- `err()` - Get last error if any
+
+**`Event`** (class from decoder)
+
+Event object returned by `get_event()`:
+- `index_time` - Unix timestamp
+- `message_string()` - Get event message as string
+- Additional fields for internal use
 
 ## Testing
 
@@ -384,17 +466,19 @@ pytest tests/ -vv
 
 ## Future Enhancements
 
-- [ ] Complete refactoring of decoder into proper module
+- [x] ~~Complete refactoring of decoder into proper module~~
+- [x] ~~Add CLI entry point with argument parsing~~
+- [x] ~~Streaming S3 support (read/write directly)~~
 - [ ] Publish to PyPI as installable package
-- [ ] Add CLI entry point with argument parsing
+- [ ] Add progress bars for large files
 - [ ] Batch processing for large files
+- [ ] Parallel processing support for multiple files
 - [ ] Incremental processing with checkpoints
 - [ ] Enhanced error handling and retries
-- [ ] Streaming S3 support (read/write directly)
-- [ ] Progress bars for large files
-- [ ] Parallel processing support
 - [ ] Archive compaction/deduplication
-- [ ] Integration examples for common platforms (Lambda, ECS, Airflow)
+- [ ] More integration examples for common platforms (Airflow, Step Functions, etc.)
+- [ ] Performance profiling and optimization
+- [ ] Comprehensive docstrings and Sphinx documentation
 
 ## Troubleshooting
 

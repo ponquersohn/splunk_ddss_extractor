@@ -58,26 +58,72 @@ pip install pyarrow
 **Extract a journal file:**
 
 ```python
-from splunk_ddss_extractor.extractor import extract_to_file
+from splunk_ddss_extractor.extractor import Extractor
+
+extractor = Extractor()
 
 # Extract to JSON Lines
-extract_to_file('/path/to/journal.zst', 'output.json', 'json')
+extractor.extract(
+    input_path='/path/to/journal.zst',
+    output_path='output.json',
+    output_format='ndjson'
+)
 
 # Extract to CSV
-extract_to_file('/path/to/journal.zst', 'output.csv', 'csv')
+extractor.extract(
+    input_path='/path/to/journal.zst',
+    output_path='output.csv',
+    output_format='csv'
+)
 
 # Extract to Parquet
-extract_to_file('/path/to/journal.zst', 'output.parquet', 'parquet')
+extractor.extract(
+    input_path='/path/to/journal.zst',
+    output_path='output.parquet',
+    output_format='parquet'
+)
+
+# Extract from S3 to local file (streaming, no download)
+extractor.extract(
+    input_path='s3://bucket/path/journal.zst',
+    output_path='output.json',
+    output_format='ndjson'
+)
+
+# Extract from local to S3
+extractor.extract(
+    input_path='/path/to/journal.zst',
+    output_path='s3://bucket/output/data.json',
+    output_format='ndjson'
+)
 ```
 
-**Stream events:**
+**Low-level streaming (advanced):**
 
 ```python
 from splunk_ddss_extractor.decoder import JournalDecoder
+import zstandard as zstd
 
-decoder = JournalDecoder('/path/to/journal.zst')
-for event in decoder.events():
-    print(f"{event.timestamp}: {event.message}")
+# For low-level access, decoder needs an uncompressed stream
+# If reading a compressed file, decompress it first:
+with open('/path/to/journal.zst', 'rb') as compressed_file:
+    dctx = zstd.ZstdDecompressor()
+    with dctx.stream_reader(compressed_file) as reader:
+        decoder = JournalDecoder(reader=reader)
+        while decoder.scan():
+            event = decoder.get_event()
+            print(f"Host: {decoder.host()}")
+            print(f"Source: {decoder.source()}")
+            print(f"Sourcetype: {decoder.source_type()}")
+            print(f"Timestamp: {event.index_time}")
+            print(f"Message: {event.message_string()}")
+
+# For uncompressed journal files:
+with open('/path/to/journal', 'rb') as f:
+    decoder = JournalDecoder(reader=f)
+    while decoder.scan():
+        event = decoder.get_event()
+        # Process event...
 ```
 
 #### Docker Usage
