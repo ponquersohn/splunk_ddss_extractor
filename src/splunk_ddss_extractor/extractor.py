@@ -56,9 +56,7 @@ class Extractor:
         """
         input_desc = input_path or "stdin"
         output_desc = output_path or "stdout"
-        logger.info(
-            f"Extracting {input_desc} -> {output_desc} (format: {output_format})"
-        )
+        logger.info(f"Extracting {input_desc} -> {output_desc} (format: {output_format})")
 
         input_stream = self._open_input(input_path)
 
@@ -73,13 +71,7 @@ class Extractor:
             with formatter(output_stream=output_writer) as writer:
                 while decoder.scan():
                     event = decoder.get_event()
-                    event_data = {
-                        "timestamp": event.index_time,
-                        "host": decoder.host(),
-                        "source": decoder.source(),
-                        "sourcetype": decoder.source_type(),
-                        "message": event.message_string(),
-                    }
+                    event_data = event.to_normalized_dict()
                     writer.write(event_data)
                     event_count += 1
 

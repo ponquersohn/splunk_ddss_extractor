@@ -3,6 +3,7 @@ Splunk Journal Parser - Python implementation
 """
 
 import io
+import json
 import logging
 import struct
 from dataclasses import dataclass, field
@@ -81,15 +82,24 @@ class Event:
     stream_id: int = 0
     stream_offset: int = 0
     stream_sub_offset: int = 0
-    index_time: int = 0
-    sub_seconds: int = 0
+    index_time_diff: int = 0
+    time_sub_seconds: int = 0
     metadata_count: int = 0
     message: bytes = b""
     include_punctuation: bool = False
     metadata_fields: Dict[str, str] = None
 
+    index_time: int = 0
+    event_time: int = 0
+    host: str = ""
+    sourcetype: str = ""
+    source: str = ""
+
     def reset(self):
         """Reset event to initial state"""
+        self.host = ""
+        self.sourcetype = ""
+        self.source = ""
         self.message_length = 0
         self.has_extended_storage = False
         self.extended_storage_len = 0
@@ -98,12 +108,14 @@ class Event:
         self.stream_id = 0
         self.stream_offset = 0
         self.stream_sub_offset = 0
-        self.index_time = 0
-        self.sub_seconds = 0
+        self.index_time_diff = 0
+        self.time_sub_seconds = 0
         self.metadata_count = 0
         self.message = b""
         self.include_punctuation = False
         self.metadata_fields = {}
+        self.index_time = 0
+        self.event_time = 0
 
     def message_string(self) -> str:
         """Return message as string"""
@@ -113,20 +125,37 @@ class Event:
             return str(self.message)
 
     def __str__(self) -> str:
-        return (
+        j = self.to_normalized_dict()
+        j["internal_state"] = (
             f"messageLength: {self.message_length} - "
             f"extendedStorageLen: {self.extended_storage_len} - "
             f"hash: {self.hash.hex()} - "
             f"streamID: {self.stream_id} - "
             f"streamOffset: {self.stream_offset} - "
             f"streamSubOffset: {self.stream_sub_offset} - "
-            f"indexTime: {self.index_time} - "
-            f"subSeconds: {self.sub_seconds} - "
+            f"indexTime: {self.index_time_diff} - "
+            f"subSeconds: {self.time_sub_seconds} - "
             f"metadataCount: {self.metadata_count} - "
             f"message: {self.message_string()} - "
             f"includePunctuation: {self.include_punctuation}"
             f"metadataFields: {self.metadata_fields}"
+            f"normalizedJson"
         )
+
+        return json.dumps(j, ensure_ascii=False)
+
+    def to_normalized_dict(self):
+        j = {
+            "index_time": self.index_time,
+            "time": self.event_time,
+            "event": self.message_string(),
+            "host": self.host,
+            "sourcetype": self.sourcetype,
+            "source": self.source,
+            "fields": self.metadata_fields,
+        }
+
+        return j
 
 
 def decode_uvarint_from_bytes(data: bytes, offset: int = 0) -> Tuple[int, int]:
@@ -154,6 +183,35 @@ def decode_varint_from_bytes(data: bytes, offset: int = 0) -> Tuple[int, int]:
     return value, n
 
 
+def decode_shifted_varint_from_bytes(data: bytes, offset: int = 0):
+    u, n = decode_uvarint_from_bytes(data, offset)
+    if n == -1:
+        return 0, -1
+    return u >> 1, n
+
+
+def bruteforce(data, start_offset=0):
+    """Bruteforce decoding starting from a given offset"""
+    for offset in range(start_offset, len(data)):
+        try:
+            varint_value, n = decode_varint_from_bytes(data, offset)
+        except Exception as e:
+            varint_value = float("nan")
+
+        try:
+            uvarint_value, n = decode_uvarint_from_bytes(data, offset)
+        except Exception as e:
+            uvarint_value = float("nan")
+
+        try:
+            shifted_value, n = decode_shifted_varint_from_bytes(data, offset)
+        except Exception as e:
+            shifted_value = float("nan")
+
+        if varint_value != float("nan") or uvarint_value != float("nan") or shifted_value != float("nan"):
+            logger.debug(f"Offset {offset}: varint={varint_value}, uvarint={uvarint_value}, shifted={shifted_value}")
+
+
 class JournalDecoder:
     """Splunk journal decoder"""
 
@@ -168,7 +226,9 @@ class JournalDecoder:
 
         # State
         self.fields: Dict[int, List[str]] = {}
-        self.base_time = 0
+        self.base_event_time = 0
+        self.base_index_time = 0
+
         self.active_host = 0
         self.active_source = 0
         self.active_source_type = 0
@@ -196,6 +256,7 @@ class JournalDecoder:
         while True:
             try:
                 self.opcode = self.reader.read_byte()
+                # logger.debug(f"Read opcode: 0x{self.opcode:02x}")
             except EOFError:
                 self.error = None
                 return False
@@ -259,7 +320,7 @@ class JournalDecoder:
         data = self.reader.read(6)  # 1 + 1 + 4 bytes
         version = data[0]
         align_bits = data[1]  # noqa unused currently
-        base_index_time = struct.unpack("<i", data[2:6])[0]  # noqa unused currently
+        self.base_index_time = struct.unpack("<i", data[2:6])[0]  # noqa unused currently
 
         logger.debug(f"Journal Version: {version}")
         # align_mask = (1 << align_bits) - 1
@@ -320,10 +381,17 @@ class JournalDecoder:
         # Base time
         if self.opcode & 0x1 != 0:
             data = self.reader.read(4)
-            self.base_time = struct.unpack("<i", data)[0]
+            self.base_event_time = struct.unpack("<i", data)[0]
+
+    def get_metadata(
+        self,
+        peek,
+    ):
+        return
 
     def _decode_event(self):
         """Decode event"""
+        logger.debug("Decoding event...")
         # Peek ahead to read event metadata
         EVENT_INFO_SIZE = 8 * 10 + 8 + self.HASH_SIZE  # Estimate
         peek = self.reader.peek(EVENT_INFO_SIZE)
@@ -360,14 +428,17 @@ class JournalDecoder:
         self.event.stream_sub_offset, n = decode_uvarint_from_bytes(peek, offset)
         offset += n
 
-        # Index time
-        self.event.index_time, n = decode_varint_from_bytes(peek, offset)
+        # _time
+        self.event.index_time_diff, n = decode_uvarint_from_bytes(peek, offset)
         offset += n
-        self.event.index_time += self.base_time
+
+        self.event.index_time = self.base_index_time + self.event.index_time_diff
 
         # Sub seconds
-        self.event.sub_seconds, n = decode_uvarint_from_bytes(peek, offset)
+        self.event.time_sub_seconds, n = decode_shifted_varint_from_bytes(peek, offset)
         offset += n
+
+        self.event.event_time = self.base_event_time * 1000 + self.event.time_sub_seconds
 
         # Metadata count
         self.event.metadata_count, n = decode_uvarint_from_bytes(peek, offset)
@@ -379,13 +450,8 @@ class JournalDecoder:
         # Read metadata
         if self.event.metadata_count > 0:
             metadata_peek = self.reader.peek(4 * 10 * self.event.metadata_count)
-            metadata_offset = 0
-
-            for i in range(self.event.metadata_count):
-                n = self._read_metadata(metadata_peek, metadata_offset)
-                metadata_offset += n
-
-            self.reader.skip(metadata_offset)
+            n = self.decode_metadata(metadata_peek)
+            self.reader.skip(n)
 
         # Extended storage
         if self.event.has_extended_storage:
@@ -400,8 +466,52 @@ class JournalDecoder:
 
         # Include punctuation flag
         self.event.include_punctuation = (self.opcode & 0x22) == 34
+        # logger.debug(self.event.message)
+        # logger.debug(self.event.metadata_fields)
+        # logger.debug(f"time: {self.event.event_time}, index_time: {self.event.index_time}")
+        # logger.debug(f"source: {self.source()}, sourcetype: {self.source_type()}")
+        self.event.source = self.source()
+        self.event.sourcetype = self.source_type()
+        self.event.host = self.host()
 
-    def _read_metadata(self, peek: bytes, offset: int) -> int:
+        pass
+
+    def decode_metadata(self, buffer):
+        metadata_offset = 0
+        self.event.metadata_fields = {}
+        for i in range(self.event.metadata_count):
+            n, meta_index = self._read_metadata(buffer, metadata_offset)
+
+            metadata_offset += n
+
+            for field_index, value_index in meta_index:
+                field, value = self.decode_field(field_index, value_index)
+                logger.debug(f"Metadata {field_index}: {value_index}, {field}: {value}")
+                if field not in self.event.metadata_fields:
+                    self.event.metadata_fields[field] = value
+                else:
+                    if isinstance(self.event.metadata_fields[field], list):
+                        self.event.metadata_fields[field].append(value)
+                    else:
+                        self.event.metadata_fields[field] = [
+                            self.event.metadata_fields[field],
+                            value,
+                        ]
+        return metadata_offset
+
+    def decode_field(self, key, value):
+        """Decode fields from tuple"""
+        key -= 1
+        value -= 1
+
+        fields = self.fields[Opcode.NEW_STRING]
+        try:
+            ret = (fields[key], fields[value])
+        except Exception as e:
+            ret = ("exc", str(e))
+        return ret
+
+    def _read_metadata(self, peek: bytes, offset: int) -> List[int]:
         """Read metadata entry, returns bytes consumed"""
         meta_key, n = decode_uvarint_from_bytes(peek, offset)
         if n == -1:
@@ -418,17 +528,21 @@ class JournalDecoder:
                 meta_key <<= 2
 
             # Get type from combined value
-            type_val = RMKI_TYPES.get(int(meta_key & 0xF))
+            rmki_key = int(meta_key & 0xF)
+            rest = meta_key >> 4
+            type_val = RMKI_TYPES.get(rmki_key)
             if type_val:
                 num_to_read = type_val.extra_ints_needed
             else:
                 num_to_read = 0
-
+        ret = []
         # Read extra integers
         for i in range(num_to_read):
-            long_val, n = decode_varint_from_bytes(peek, offset + peek_offset)
+            long_val, n = decode_uvarint_from_bytes(peek, offset + peek_offset)
+            ret.append((rest, long_val))
+            # logger.debug(f"decoded {long_val} with bytes {n}")
             if n == -1:
                 raise ValueError("Cannot read varint for metadata value")
             peek_offset += n
 
-        return peek_offset
+        return peek_offset, ret
