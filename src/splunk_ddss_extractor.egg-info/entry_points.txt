@@ -1,0 +1,2 @@
+[console_scripts]
+splunk-extract = splunk_ddss_extractor.main:main
