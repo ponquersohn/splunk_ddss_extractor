@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="splunk-ddss-extractor",
-    version="0.2.0",
+    version="0.2.1",
     author="Lech Lachowicz",
     description="Convert Splunk journal archives to raw format",
     long_description=long_description,
