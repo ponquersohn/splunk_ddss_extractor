@@ -24,13 +24,19 @@ from .decoder import (
 logger = logging.getLogger(__name__)
 
 
+class MetadataError(Exception):
+    """Non-fatal metadata extraction error"""
+    pass
+
+
 class AsyncJournalDecoder:
     """Async Splunk journal decoder"""
 
     HASH_SIZE = 20
 
-    def __init__(self, reader):
+    def __init__(self, reader, trace: bool = False):
         self.reader = AsyncJournalStream(reader)
+        self.trace = trace
         self.opcode = 0
         self.event = Event()
         self.error: Optional[Exception] = None
@@ -43,6 +49,49 @@ class AsyncJournalDecoder:
         self.active_host = 0
         self.active_source = 0
         self.active_source_type = 0
+
+        # Error tracking for summary reporting
+        self.metadata_error_counts = {}
+        self.total_metadata_errors = 0
+        self.events_with_errors = 0
+
+    def _trace(self, message: str):
+        """Instance-specific trace logging"""
+        if self.trace:
+            logger.debug(f"[TRACE:{id(self)}] {message}")
+
+    def _warn_metadata_error(self, context: str, error: Exception):
+        """Track metadata extraction errors for summary reporting"""
+        # Count the error type
+        error_key = f"{context}: {type(error).__name__}"
+        self.metadata_error_counts[error_key] = self.metadata_error_counts.get(error_key, 0) + 1
+        self.total_metadata_errors += 1
+
+        # Only log individual errors when tracing is enabled
+        if self.trace:
+            logger.debug(f"Metadata error #{self.total_metadata_errors} in {context}: {error}")
+
+    def get_error_summary(self):
+        """Get summary of metadata errors encountered"""
+        if not self.metadata_error_counts:
+            return None
+
+        summary = {
+            "total_errors": self.total_metadata_errors,
+            "events_with_errors": self.events_with_errors,
+            "error_types": dict(self.metadata_error_counts)
+        }
+        return summary
+
+    def log_error_summary(self):
+        """Log final error summary"""
+        summary = self.get_error_summary()
+        if summary:
+            logger.warning(f"Metadata extraction summary: {summary['total_errors']} errors "
+                         f"across {summary['events_with_errors']} events. "
+                         f"Error types: {summary['error_types']}")
+        else:
+            logger.debug("No metadata errors encountered")
 
     def host(self) -> str:
         """Get current host"""
@@ -67,6 +116,7 @@ class AsyncJournalDecoder:
         while True:
             try:
                 self.opcode = await self.reader.read_byte()
+                self._trace(f"Read opcode: 0x{self.opcode:02x}")
             except EOFError:
                 self.error = None
                 return False
@@ -79,7 +129,11 @@ class AsyncJournalDecoder:
 
             try:
                 await self._decode_next()
+            except MetadataError as e:
+                # Metadata errors are non-fatal - log and continue
+                self._warn_metadata_error("scan", e)
             except Exception as e:
+                # Raw decoding errors are fatal
                 self.error = e
                 return False
 
@@ -276,24 +330,50 @@ class AsyncJournalDecoder:
     def decode_metadata(self, buffer):
         metadata_offset = 0
         self.event.metadata_fields = {}
+        extraction_errors = []
+
         for i in range(self.event.metadata_count):
-            n, meta_index = self._read_metadata(buffer, metadata_offset)
+            try:
+                n, meta_index = self._read_metadata(buffer, metadata_offset)
+                metadata_offset += n
 
-            metadata_offset += n
+                for field_index, value_index in meta_index:
+                    try:
+                        field, value = self.decode_field(field_index, value_index)
+                        self._trace(f"Metadata {field_index}: {value_index}, {field}: {value}")
 
-            for field_index, value_index in meta_index:
-                field, value = self.decode_field(field_index, value_index)
-                logger.debug(f"Metadata {field_index}: {value_index}, {field}: {value}")
-                if field not in self.event.metadata_fields:
-                    self.event.metadata_fields[field] = value
-                else:
-                    if isinstance(self.event.metadata_fields[field], list):
-                        self.event.metadata_fields[field].append(value)
-                    else:
-                        self.event.metadata_fields[field] = [
-                            self.event.metadata_fields[field],
-                            value,
-                        ]
+                        # Check if this was an error field
+                        if field == "__field_error__":
+                            extraction_errors.append(value)
+                            continue
+
+                        if field not in self.event.metadata_fields:
+                            self.event.metadata_fields[field] = value
+                        else:
+                            if isinstance(self.event.metadata_fields[field], list):
+                                self.event.metadata_fields[field].append(value)
+                            else:
+                                self.event.metadata_fields[field] = [
+                                    self.event.metadata_fields[field],
+                                    value,
+                                ]
+                    except Exception as e:
+                        error_msg = f"field={field_index}, value={value_index}: {str(e)}"
+                        extraction_errors.append(error_msg)
+                        self._warn_metadata_error(f"decode_metadata field processing", e)
+
+            except Exception as e:
+                error_msg = f"metadata entry {i}: {str(e)}"
+                extraction_errors.append(error_msg)
+                self._warn_metadata_error(f"decode_metadata entry {i}", e)
+                # Try to continue with next metadata entry
+                metadata_offset += 1  # Minimal increment to try next position
+
+        # Add extraction errors to metadata if any occurred
+        if extraction_errors:
+            self.event.metadata_fields["__extraction_errors__"] = extraction_errors
+            self.events_with_errors += 1
+
         return metadata_offset
 
     def decode_field(self, key, value):
@@ -305,7 +385,9 @@ class AsyncJournalDecoder:
         try:
             ret = (fields[key], fields[value])
         except Exception as e:
-            ret = ("exc", str(e))
+            self._warn_metadata_error(f"decode_field(key={key+1}, value={value+1})", e)
+            # Return error indicator that can be detected in event metadata
+            ret = ("__field_error__", f"key={key+1}, value={value+1}: {str(e)}")
         return ret
 
     def _read_metadata(self, peek: bytes, offset: int) -> List[int]:

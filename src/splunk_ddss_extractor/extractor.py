@@ -25,8 +25,9 @@ class Extractor:
     High-level extractor for Splunk journal files with streaming support.
     """
 
-    def __init__(self):
+    def __init__(self, trace: bool = False):
         self._s3_client = None
+        self.trace = trace
 
     @property
     def s3_client(self):
@@ -40,6 +41,7 @@ class Extractor:
         input_path: Optional[str] = None,
         output_path: Optional[str] = None,
         output_format: str = "ndjson",
+        trace: Optional[bool] = None,
     ) -> int:
         """
         Extract journal to output with automatic compression detection
@@ -48,8 +50,7 @@ class Extractor:
             input_path: Local file path, s3://bucket/key, or None for stdin
             output_path: Local file path, s3://bucket/key, or None for stdout
             output_format: 'ndjson', 'csv', 'parquet' (default: ndjson)
-            input_compression: 'auto' (detect from filename), 'zst', 'gz', 'none'
-            output_compression: 'auto' (detect from filename), 'gz', 'none'
+            trace: Enable debug tracing for this extraction (overrides instance setting)
 
         Returns:
             Number of events extracted
@@ -60,8 +61,11 @@ class Extractor:
 
         input_stream = self._open_input(input_path)
 
+        # Determine trace setting - method parameter overrides instance setting
+        use_trace = trace if trace is not None else self.trace
+
         # Create decoder with streaming reader
-        decoder = JournalDecoder(reader=input_stream)
+        decoder = JournalDecoder(reader=input_stream, trace=use_trace)
 
         formatter = get_formatter(output_format)
 
@@ -81,6 +85,9 @@ class Extractor:
 
                 if decoder.err():
                     raise decoder.err()
+
+        # Log error summary at the end
+        decoder.log_error_summary()
 
         logger.info(f"Successfully extracted {event_count} events")
         return event_count

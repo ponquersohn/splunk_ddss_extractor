@@ -11,6 +11,8 @@ This project provides a Python library to convert Splunk self-hosted storage arc
 - Multiple output formats (JSON Lines, CSV, Parquet)
 - Streaming processing for large files
 - Metadata extraction (host, source, sourcetype, timestamp)
+- Enhanced debugging with per-instance trace logging
+- Resilient error handling (continues processing despite metadata errors)
 - Simple Python API and CLI interface
 
 ## Architecture
@@ -417,11 +419,15 @@ From `extract_journal.py`:
 
 High-level interface for extraction tasks.
 
+Constructor:
+- `Extractor(trace=False)` - Create extractor with optional debug tracing
+
 Methods:
-- `extract(input_path, output_path, output_format='ndjson')` - Extract journal to output format
+- `extract(input_path, output_path, output_format='ndjson', trace=None)` - Extract journal to output format
   - `input_path`: Local file path, `s3://bucket/key`, or `None` for stdin
   - `output_path`: Local file path, `s3://bucket/key`, or `None` for stdout
   - `output_format`: `'ndjson'`, `'csv'`, or `'parquet'`
+  - `trace`: Override instance trace setting for this extraction
   - Returns: Number of events extracted
   - Supports streaming S3 operations (no temp files)
   - Automatic compression detection (.zst, .gz, uncompressed)
@@ -431,7 +437,7 @@ Methods:
 Low-level decoder for journal files. Requires uncompressed stream input.
 
 Constructor:
-- `JournalDecoder(reader)` - Pass a file-like reader object (must be uncompressed)
+- `JournalDecoder(reader, trace=False)` - Pass a file-like reader object with optional tracing
 
 Methods:
 - `scan()` - Scan for next event, returns `True` if found
@@ -447,6 +453,52 @@ Event object returned by `get_event()`:
 - `index_time` - Unix timestamp
 - `message_string()` - Get event message as string
 - Additional fields for internal use
+
+## Debugging and Error Handling
+
+### Enhanced Error Handling (New)
+
+The decoders now differentiate between two types of errors:
+
+1. **Metadata errors** (non-fatal): Issues with field extraction that don't prevent event processing
+2. **Raw decoding errors** (fatal): Fundamental journal corruption that stops processing
+
+When metadata errors occur, the event is still extracted but includes an `__extraction_errors__` field in the metadata.
+
+### Debug Tracing (New)
+
+Both sync and async decoders support per-instance debug tracing:
+
+**Constructor Parameters:**
+- `JournalDecoder(reader, trace=False)` - Enable/disable tracing for sync decoder
+- `AsyncJournalDecoder(reader, trace=False)` - Enable/disable tracing for async decoder
+- `Extractor(trace=False)` - Enable/disable tracing for high-level interface
+
+**Usage Examples:**
+
+```python
+# Enable debug tracing for problematic files
+decoder = JournalDecoder(reader=file_stream, trace=True)
+extractor = Extractor(trace=True)
+
+# Check for metadata extraction errors
+while decoder.scan():
+    event = decoder.get_event()
+    if "__extraction_errors__" in event.metadata_fields:
+        print(f"Metadata errors: {event.metadata_fields['__extraction_errors__']}")
+```
+
+**CLI Usage:**
+```bash
+# Enable tracing via command line
+python -m splunk_ddss_extractor.main -i journal.zst -o output.json --trace
+```
+
+**Benefits:**
+- **Resilient processing**: Metadata errors don't stop extraction
+- **Better debugging**: Per-instance tracing helps isolate issues
+- **Error visibility**: All extraction problems are properly logged
+- **Production ready**: No performance impact when tracing disabled
 
 ## Testing
 
@@ -474,7 +526,7 @@ pytest tests/ -vv
 - [ ] Batch processing for large files
 - [ ] Parallel processing support for multiple files
 - [ ] Incremental processing with checkpoints
-- [ ] Enhanced error handling and retries
+- [x] ~~Enhanced error handling and debug tracing~~
 - [ ] Archive compaction/deduplication
 - [ ] More integration examples for common platforms (Airflow, Step Functions, etc.)
 - [ ] Performance profiling and optimization

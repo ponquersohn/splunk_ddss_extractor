@@ -57,6 +57,9 @@ Examples:
   %(prog)s -i journal.zst -o output.csv -f csv
   %(prog)s -i journal.zst -o output.parquet -f parquet
 
+  # Enable debug tracing
+  %(prog)s -i journal.zst -o output.json --trace
+
 Supported formats:
   - ndjson (newline-delimited JSON, default)
   - csv
@@ -116,6 +119,12 @@ Compression:
         help="Suppress informational output (equivalent to --log-level WARNING)",
     )
 
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Enable per-instance debug tracing for decoder operations",
+    )
+
     return parser.parse_args()
 
 
@@ -139,7 +148,7 @@ def main() -> int:
         logger.debug(f"Arguments: {args}")
 
         # Create extractor and run extraction
-        extractor = Extractor()
+        extractor = Extractor(trace=args.trace)
 
         event_count = extractor.extract(
             input_path=args.input_file,
