@@ -248,7 +248,7 @@ class AsyncJournalDecoder:
 
     async def _decode_event(self):
         """Decode event"""
-        logger.debug("Decoding event...")
+        self._trace("Decoding event...")
         # Peek ahead to read event metadata
         EVENT_INFO_SIZE = 8 * 10 + 8 + self.HASH_SIZE  # Estimate
         peek = await self.reader.peek(EVENT_INFO_SIZE)

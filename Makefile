@@ -88,10 +88,21 @@ dev-setup: init install ## Complete development setup
 check: test ## Run all checks (tests)
 	@echo "$(GREEN)✓ All checks passed$(NC)"
 
-version: ## Show version information
+version: ## Show current version information
 	@echo "$(GREEN)Splunk DDSS Extractor$(NC)"
 	@echo "  Python:    $$($(PYTHON) --version)"
 	@echo "  Docker:    $$(docker --version)"
+	@echo ""
+	@$(PYTHON) scripts/bump_version.py --current
+
+bump-patch: ## Bump patch version (0.2.1 -> 0.2.2)
+	@$(PYTHON) scripts/bump_version.py patch
+
+bump-minor: ## Bump minor version (0.2.1 -> 0.3.0)
+	@$(PYTHON) scripts/bump_version.py minor
+
+bump-major: ## Bump major version (0.2.1 -> 1.0.0)
+	@$(PYTHON) scripts/bump_version.py major
 
 # Default target
 .DEFAULT_GOAL := env
