@@ -21,17 +21,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Build native wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          args: --release -i python${{ matrix.python-version }}
-          manylinux: auto
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Install wheel and test dependencies
-        run: |
-          pip install target/wheels/splunk_ddss_extractor-*.whl
-          pip install pytest pytest-cov zstandard orjson
+      - name: Install test dependencies
+        run: pip install pytest pytest-cov zstandard orjson maturin
+
+      - name: Build and install native extension
+        run: maturin develop --release
 
       - name: Run tests
         run: pytest tests/ -v
