@@ -22,7 +22,7 @@ COPY rust/ rust/
 
 # Build the wheel with native extension
 RUN maturin build --release --find-interpreter \
-    && pip install --no-cache-dir target/wheels/splunk_ddss_extractor-*.whl
+    && pip install --no-cache-dir rust/target/wheels/splunk_ddss_extractor-*.whl
 
 # --- Runtime stage ---
 FROM python:3.12-slim
