@@ -36,7 +36,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheel-linux-x86_64-${{ matrix.python-version }}
-          path: target/wheels/*.whl
+          path: rust/target/wheels/*.whl
 
   build-linux-aarch64:
     runs-on: ubuntu-latest
@@ -58,7 +58,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheel-linux-aarch64-${{ matrix.python-version }}
-          path: target/wheels/*.whl
+          path: rust/target/wheels/*.whl
 
   build-sdist:
     runs-on: ubuntu-latest
