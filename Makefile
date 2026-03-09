@@ -95,14 +95,41 @@ version: ## Show current version information
 	@echo ""
 	@$(PYTHON) scripts/bump_version.py --current
 
-bump-patch: ## Bump patch version (0.2.1 -> 0.2.2)
+bump-patch: ## Bump patch version (0.3.0 -> 0.3.1)
 	@$(PYTHON) scripts/bump_version.py patch
 
-bump-minor: ## Bump minor version (0.2.1 -> 0.3.0)
+bump-minor: ## Bump minor version (0.3.0 -> 0.4.0)
 	@$(PYTHON) scripts/bump_version.py minor
 
-bump-major: ## Bump major version (0.2.1 -> 1.0.0)
+bump-major: ## Bump major version (0.3.0 -> 1.0.0)
 	@$(PYTHON) scripts/bump_version.py major
+
+release: ## Release: bump patch, commit, tag, push
+	@$(PYTHON) scripts/bump_version.py patch
+	@VERSION=$$($(PYTHON) -c "import re; print(re.search(r'version\s*=\s*\"([^\"]+)\"', open('pyproject.toml').read()).group(1))"); \
+	git add pyproject.toml rust/Cargo.toml src/splunk_ddss_extractor/__init__.py && \
+	git commit -m "Release v$$VERSION" && \
+	git tag -a "v$$VERSION" -m "Release v$$VERSION" && \
+	echo "$(GREEN)Tagged v$$VERSION$(NC)" && \
+	echo "$(YELLOW)Run 'git push && git push --tags' to publish, then create a GitHub release to trigger PyPI publishing.$(NC)"
+
+release-minor: ## Release: bump minor, commit, tag, push
+	@$(PYTHON) scripts/bump_version.py minor
+	@VERSION=$$($(PYTHON) -c "import re; print(re.search(r'version\s*=\s*\"([^\"]+)\"', open('pyproject.toml').read()).group(1))"); \
+	git add pyproject.toml rust/Cargo.toml src/splunk_ddss_extractor/__init__.py && \
+	git commit -m "Release v$$VERSION" && \
+	git tag -a "v$$VERSION" -m "Release v$$VERSION" && \
+	echo "$(GREEN)Tagged v$$VERSION$(NC)" && \
+	echo "$(YELLOW)Run 'git push && git push --tags' to publish, then create a GitHub release to trigger PyPI publishing.$(NC)"
+
+release-major: ## Release: bump major, commit, tag, push
+	@$(PYTHON) scripts/bump_version.py major
+	@VERSION=$$($(PYTHON) -c "import re; print(re.search(r'version\s*=\s*\"([^\"]+)\"', open('pyproject.toml').read()).group(1))"); \
+	git add pyproject.toml rust/Cargo.toml src/splunk_ddss_extractor/__init__.py && \
+	git commit -m "Release v$$VERSION" && \
+	git tag -a "v$$VERSION" -m "Release v$$VERSION" && \
+	echo "$(GREEN)Tagged v$$VERSION$(NC)" && \
+	echo "$(YELLOW)Run 'git push && git push --tags' to publish, then create a GitHub release to trigger PyPI publishing.$(NC)"
 
 rust-build: ## Build Rust native extension (debug)
 	@echo "$(YELLOW)Building Rust extension (debug)...$(NC)"
