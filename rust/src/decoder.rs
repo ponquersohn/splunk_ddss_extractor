@@ -132,8 +132,8 @@ pub fn scan_batch<'py>(
     }
     state.leftover.clear();
 
-    // Rewind abs_pos for re-processed leftover bytes
-    state.abs_pos -= leftover_len;
+    // abs_pos already points to the start of the leftover region
+    // (rewound by NeedMore handling), so no adjustment needed.
 
     let mut pos: usize = 0;
     let mut events: Vec<EventData> = Vec::new();
