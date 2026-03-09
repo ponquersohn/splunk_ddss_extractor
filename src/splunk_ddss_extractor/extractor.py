@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-import boto3
 import zstandard as zstd
 
 from .native_decoder import NativeJournalDecoder
@@ -33,6 +32,7 @@ class Extractor:
     def s3_client(self):
         """Lazy initialization of S3 client"""
         if self._s3_client is None:
+            import boto3
             self._s3_client = boto3.client("s3")
         return self._s3_client
 

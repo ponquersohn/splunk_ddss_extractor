@@ -4,7 +4,6 @@ import logging
 import sys
 from typing import Any, Dict, Optional, Tuple
 
-import boto3
 import zstandard as zstd
 
 logger = logging.getLogger(__name__)
@@ -136,6 +135,7 @@ class S3Writer(OutputWriter):
 
     def __init__(self, s3_uri: str, s3_client=None):
         self.s3_uri = s3_uri
+        import boto3
         self.s3_client = s3_client or boto3.client("s3")
 
         self.bucket, self.key = self._parse_s3_uri(s3_uri)
