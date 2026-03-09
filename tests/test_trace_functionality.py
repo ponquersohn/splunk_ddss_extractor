@@ -176,9 +176,9 @@ class TestEnhancedErrorHandling:
         from splunk_ddss_extractor.async_decoder import MetadataError as AsyncMetadataError
         assert issubclass(AsyncMetadataError, Exception)
 
-    @patch('splunk_ddss_extractor.extractor.JournalDecoder')
+    @patch('splunk_ddss_extractor.extractor.NativeJournalDecoder')
     def test_extractor_passes_trace_to_decoder(self, mock_decoder_class):
-        """Test that Extractor passes trace parameter to JournalDecoder"""
+        """Test that Extractor passes trace parameter to NativeJournalDecoder"""
         mock_decoder = MagicMock()
         mock_decoder_class.return_value = mock_decoder
         mock_decoder.scan.return_value = False
