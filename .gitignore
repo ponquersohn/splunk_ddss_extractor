@@ -1,19 +1,28 @@
 journal.zst
-
+work/
 test_data
+
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.so
 *.env
 *.venv
+.venv/
 env/
 venv/
 ENV/
 .Python
+*.egg-info/
+dist/
+build/
 *.sqlite3
 *.log
+
+# Rust
+rust/target/
 
 # VSCode
 .vscode/

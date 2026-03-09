@@ -1,0 +1,47 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "splunk-ddss-extractor"
+version = "0.3.0"
+description = "Extract events from Splunk journal archives to raw format (JSON, CSV, Parquet)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Lech Lachowicz"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: System :: Archiving",
+]
+dependencies = ["zstandard>=0.22.0", "orjson>=3.9.0"]
+
+[project.optional-dependencies]
+s3 = ["boto3>=1.34.0"]
+cli = ["click>=8.1.7"]
+parquet = ["pyarrow>=14.0.0"]
+dev = ["pytest>=7.4.3", "pytest-cov>=4.1.0"]
+
+[project.urls]
+Homepage = "https://github.com/ponquersohn/splunk_ddss_extractor"
+Repository = "https://github.com/ponquersohn/splunk_ddss_extractor"
+Issues = "https://github.com/ponquersohn/splunk_ddss_extractor/issues"
+
+[project.scripts]
+splunk-extract = "splunk_ddss_extractor.main:main"
+
+[tool.maturin]
+manifest-path = "rust/Cargo.toml"
+module-name = "splunk_ddss_extractor._native"
+python-source = "src"
+sdist-include = ["rust/Cargo.toml", "rust/src/**"]

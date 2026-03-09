@@ -4,7 +4,6 @@ import logging
 import sys
 from typing import Any, Dict, Optional, Tuple
 
-import boto3
 import zstandard as zstd
 
 logger = logging.getLogger(__name__)
@@ -67,10 +66,15 @@ class StdoutWriter(OutputWriter):
     def __init__(self):
         super().__init__()
         self.file = sys.stdout
+        self._binary = sys.stdout.buffer
 
     def write(self, data: str):
         """Write event to stdout"""
         self.file.write(data)
+
+    def write_bytes(self, data: bytes):
+        """Write raw bytes to stdout"""
+        self._binary.write(data)
 
     def close(self):
         """Close file if needed"""
@@ -92,6 +96,10 @@ class FileWriter(OutputWriter):
     def write(self, data: str):
         """Write event to file"""
         self.file.write(data.encode("utf-8"))
+
+    def write_bytes(self, data: bytes):
+        """Write raw bytes to file"""
+        self.file.write(data)
 
     def close(self):
         """Close file"""
@@ -127,6 +135,7 @@ class S3Writer(OutputWriter):
 
     def __init__(self, s3_uri: str, s3_client=None):
         self.s3_uri = s3_uri
+        import boto3
         self.s3_client = s3_client or boto3.client("s3")
 
         self.bucket, self.key = self._parse_s3_uri(s3_uri)
@@ -135,9 +144,13 @@ class S3Writer(OutputWriter):
         self.buffer = io.BytesIO()
         self.temp_file = self._get_compression(s3_uri, self.buffer)
 
-    def write(self, event_data: Dict[str, Any]):
+    def write(self, data: str):
         """Write event to buffer"""
-        self.temp_file.write(event_data)
+        self.temp_file.write(data.encode("utf-8"))
+
+    def write_bytes(self, data: bytes):
+        """Write raw bytes to buffer"""
+        self.temp_file.write(data)
 
     def close(self):
         """Flush buffer and upload to S3"""

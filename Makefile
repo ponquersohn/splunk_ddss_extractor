@@ -1,4 +1,4 @@
-.PHONY: help env venv install test clean docker
+.PHONY: help env venv install test clean docker rust-build rust-build-release rust-test
 
 # Variables
 PROJECT_NAME := splunk-ddss-extractor
@@ -103,6 +103,21 @@ bump-minor: ## Bump minor version (0.2.1 -> 0.3.0)
 
 bump-major: ## Bump major version (0.2.1 -> 1.0.0)
 	@$(PYTHON) scripts/bump_version.py major
+
+rust-build: ## Build Rust native extension (debug)
+	@echo "$(YELLOW)Building Rust extension (debug)...$(NC)"
+	@. $(VENV)/bin/activate && source $$HOME/.cargo/env && maturin develop
+	@echo "$(GREEN)✓ Rust extension built (debug)$(NC)"
+
+rust-build-release: ## Build Rust native extension (release)
+	@echo "$(YELLOW)Building Rust extension (release)...$(NC)"
+	@. $(VENV)/bin/activate && source $$HOME/.cargo/env && maturin develop --release
+	@echo "$(GREEN)✓ Rust extension built (release)$(NC)"
+
+rust-test: ## Run Rust unit tests
+	@echo "$(YELLOW)Running Rust tests...$(NC)"
+	@source $$HOME/.cargo/env && cd rust && cargo test
+	@echo "$(GREEN)✓ Rust tests passed$(NC)"
 
 # Default target
 .DEFAULT_GOAL := env

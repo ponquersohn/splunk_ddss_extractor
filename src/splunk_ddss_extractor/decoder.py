@@ -190,28 +190,6 @@ def decode_shifted_varint_from_bytes(data: bytes, offset: int = 0):
     return u >> 1, n
 
 
-def bruteforce(data, start_offset=0):
-    """Bruteforce decoding starting from a given offset"""
-    for offset in range(start_offset, len(data)):
-        try:
-            varint_value, n = decode_varint_from_bytes(data, offset)
-        except Exception as e:
-            varint_value = float("nan")
-
-        try:
-            uvarint_value, n = decode_uvarint_from_bytes(data, offset)
-        except Exception as e:
-            uvarint_value = float("nan")
-
-        try:
-            shifted_value, n = decode_shifted_varint_from_bytes(data, offset)
-        except Exception as e:
-            shifted_value = float("nan")
-
-        if varint_value != float("nan") or uvarint_value != float("nan") or shifted_value != float("nan"):
-            logger.debug(f"Offset {offset}: varint={varint_value}, uvarint={uvarint_value}, shifted={shifted_value}")
-
-
 class MetadataError(Exception):
     """Non-fatal metadata extraction error"""
     pass
@@ -435,12 +413,6 @@ class JournalDecoder:
         if self.opcode & 0x1 != 0:
             data = self.reader.read(4)
             self.base_event_time = struct.unpack("<i", data)[0]
-
-    def get_metadata(
-        self,
-        peek,
-    ):
-        return
 
     def _decode_event(self):
         """Decode event"""

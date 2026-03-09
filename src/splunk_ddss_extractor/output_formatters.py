@@ -1,13 +1,14 @@
 import csv
 import io
-import json
 from typing import Any, Dict
+
+import orjson
 
 
 class OutputFormatter:
     """Base writer class"""
 
-    def __init__(self, output_stream: io.TextIOWrapper):
+    def __init__(self, output_stream):
         self.output_stream = output_stream
 
     def write(self, event_data: Dict[str, Any]):
@@ -25,6 +26,9 @@ class OutputFormatter:
         self.close()
 
 
+_NEWLINE = b"\n"
+
+
 class JSONLinesFormatter(OutputFormatter):
     """
     Write events as NDJSON (Newline Delimited JSON / JSON Lines) format
@@ -35,25 +39,13 @@ class JSONLinesFormatter(OutputFormatter):
     Supports optional gzip compression.
     """
 
-    def format_json_line(self, event_data: Dict[str, Any]) -> str:
-        """
-        Format event as JSON line
-
-        Args:
-            event_data: Event dictionary
-
-        Returns:
-            JSON string
-        """
-        return json.dumps(event_data, ensure_ascii=False)
-
-    def __init__(self, output_stream: io.TextIOWrapper):
+    def __init__(self, output_stream):
         super().__init__(output_stream=output_stream)
         self.count = 0
 
     def write(self, event_data: Dict[str, Any]):
-        """Write event as JSON line"""
-        self.output_stream.write(self.format_json_line(event_data) + "\n")
+        """Write event as JSON line (bytes via orjson)"""
+        self.output_stream.write_bytes(orjson.dumps(event_data) + _NEWLINE)
         self.count += 1
 
     def close(self):

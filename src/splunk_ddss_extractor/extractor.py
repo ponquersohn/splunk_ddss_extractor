@@ -10,10 +10,9 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-import boto3
 import zstandard as zstd
 
-from .decoder import JournalDecoder
+from .native_decoder import NativeJournalDecoder
 from .output_formatters import get_formatter
 from .writers import FileWriter, S3Writer, StdoutWriter
 
@@ -33,6 +32,7 @@ class Extractor:
     def s3_client(self):
         """Lazy initialization of S3 client"""
         if self._s3_client is None:
+            import boto3
             self._s3_client = boto3.client("s3")
         return self._s3_client
 
@@ -65,7 +65,7 @@ class Extractor:
         use_trace = trace if trace is not None else self.trace
 
         # Create decoder with streaming reader
-        decoder = JournalDecoder(reader=input_stream, trace=use_trace)
+        decoder = NativeJournalDecoder(reader=input_stream, trace=use_trace)
 
         formatter = get_formatter(output_format)
 
@@ -74,8 +74,7 @@ class Extractor:
         with self._open_output(output_path) as output_writer:
             with formatter(output_stream=output_writer) as writer:
                 while decoder.scan():
-                    event = decoder.get_event()
-                    event_data = event.to_normalized_dict()
+                    event_data = decoder.get_event()  # dict from Rust
                     writer.write(event_data)
                     event_count += 1
 
