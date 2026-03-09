@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build native wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --find-interpreter
+          manylinux: auto
+
+      - name: Install wheel and test dependencies
+        run: |
+          pip install target/wheels/splunk_ddss_extractor-*.whl
+          pip install pytest pytest-cov zstandard orjson
+
+      - name: Run tests
+        run: pytest tests/ -v
